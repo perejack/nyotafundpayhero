@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { X, ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,8 +21,6 @@ import StepDeviceDetails from "./form-steps/StepDeviceDetails";
 import StepIdentification from "./form-steps/StepIdentification";
 import ProcessingScreen from "./ProcessingScreen";
 import SuccessScreen from "./SuccessScreen";
-import { supabase } from "@/lib/supabase";
-import { uploadFile, UploadResult } from "@/lib/fileUpload";
 
 export interface FormData {
   // Loan Selection
@@ -57,11 +54,6 @@ export interface FormData {
   // Identification
   mobileNumber: string;
   nationalId: string;
-  
-  // File Uploads
-  idFrontFile: File | null;
-  idBackFile: File | null;
-  kraPinFile: File | null;
 }
 
 const initialFormData: FormData = {
@@ -85,9 +77,6 @@ const initialFormData: FormData = {
   phoneCondition: "",
   mobileNumber: "",
   nationalId: "",
-  idFrontFile: null,
-  idBackFile: null,
-  kraPinFile: null,
 };
 
 interface LoanApplicationFormProps {
@@ -108,14 +97,11 @@ const steps = [
 const DRAFT_STORAGE_KEY = "nyota_loan_application_draft_v1";
 
 const LoanApplicationForm = ({ variant = "modal", isOpen, onClose }: LoanApplicationFormProps) => {
-  const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState<FormData>(initialFormData);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const footerCtaRef = useRef<HTMLDivElement | null>(null);
   const didAutoScrollCtaRef = useRef(false);
@@ -139,138 +125,8 @@ const LoanApplicationForm = ({ variant = "modal", isOpen, onClose }: LoanApplica
     }
   };
 
-  const handleSubmit = async () => {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
+  const handleSubmit = () => {
     setIsProcessing(true);
-    setUploadProgress(0);
-
-    console.log('[Submit] Starting submission...', { 
-      hasIdFront: !!formData.idFrontFile, 
-      hasIdBack: !!formData.idBackFile, 
-      hasKraPin: !!formData.kraPinFile 
-    });
-
-    try {
-      // Upload files first
-      const uploadResults: {
-        idFront?: UploadResult;
-        idBack?: UploadResult;
-        kraPin?: UploadResult;
-      } = {};
-
-      if (formData.idFrontFile) {
-        console.log('[Submit] Uploading ID Front...');
-        setUploadProgress(10);
-        uploadResults.idFront = await uploadFile(
-          formData.idFrontFile,
-          'id-documents',
-          formData.nationalId
-        );
-        console.log('[Submit] ID Front uploaded:', uploadResults.idFront);
-      }
-
-      if (formData.idBackFile) {
-        console.log('[Submit] Uploading ID Back...');
-        setUploadProgress(30);
-        uploadResults.idBack = await uploadFile(
-          formData.idBackFile,
-          'id-documents',
-          formData.nationalId
-        );
-        console.log('[Submit] ID Back uploaded:', uploadResults.idBack);
-      }
-
-      if (formData.kraPinFile) {
-        console.log('[Submit] Uploading KRA PIN...');
-        setUploadProgress(50);
-        uploadResults.kraPin = await uploadFile(
-          formData.kraPinFile,
-          'kra-documents',
-          formData.nationalId
-        );
-        console.log('[Submit] KRA PIN uploaded:', uploadResults.kraPin);
-      }
-
-      setUploadProgress(70);
-      console.log('[Submit] Saving to database...');
-
-      // Save application to database
-      const { data: insertData, error: dbError } = await supabase.from('loan_applications').insert({
-        // Loan Selection
-        loan_type: formData.loanType,
-        loan_amount: formData.loanAmount,
-        
-        // Purpose
-        purpose: formData.purpose,
-        purpose_description: formData.purposeDescription || null,
-        
-        // Personal Details
-        full_name: formData.fullName,
-        date_of_birth: formData.dateOfBirth,
-        gender: formData.gender,
-        employment_status: formData.employmentStatus,
-        education_level: formData.educationLevel,
-        has_outstanding_loan: formData.hasOutstandingLoan,
-        referral_source: formData.referralSource,
-        
-        // Financial Details
-        monthly_income: formData.monthlyIncome,
-        income_source: formData.incomeSource,
-        has_other_income: formData.hasOtherIncome,
-        income_type: formData.incomeType,
-        
-        // Device Details
-        phone_usage_duration: formData.phoneUsageDuration,
-        owns_phone: formData.ownsPhone,
-        phone_condition: formData.phoneCondition,
-        
-        // Identification
-        mobile_number: formData.mobileNumber,
-        national_id: formData.nationalId,
-        
-        // File uploads
-        id_front_url: uploadResults.idFront?.url || null,
-        id_back_url: uploadResults.idBack?.url || null,
-        kra_pin_url: uploadResults.kraPin?.url || null,
-        id_front_path: uploadResults.idFront?.path || null,
-        id_back_path: uploadResults.idBack?.path || null,
-        kra_pin_path: uploadResults.kraPin?.path || null,
-        
-        // Status
-        status: 'pending',
-      });
-
-      if (dbError) {
-        console.error('[Submit] Database error:', dbError);
-        throw new Error(`Failed to save application: ${dbError.message} (${dbError.code || 'unknown error'})`);
-      }
-
-      console.log('[Submit] Database insert successful:', insertData);
-
-      setUploadProgress(100);
-      setTimeout(() => {
-        setIsProcessing(false);
-        setIsSuccess(true);
-        toast({
-          title: "Application Submitted",
-          description: "Your loan application has been successfully submitted and is now under review.",
-        });
-      }, 500);
-    } catch (error) {
-      console.error('[Submit] Full error details:', error);
-      if (error && typeof error === 'object') {
-        console.error('[Submit] Error object keys:', Object.keys(error));
-      }
-      toast({
-        title: "Submission Failed",
-        description: error instanceof Error ? error.message : "Failed to submit application. Please try again.",
-        variant: "destructive",
-      });
-      setIsProcessing(false);
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   const handleProcessingComplete = () => {
@@ -413,13 +269,7 @@ const LoanApplicationForm = ({ variant = "modal", isOpen, onClose }: LoanApplica
           Boolean(formData.phoneCondition)
         );
       case 6:
-        return (
-          formData.mobileNumber.length >= 10 && 
-          formData.nationalId.length >= 6 &&
-          formData.idFrontFile !== null &&
-          formData.idBackFile !== null &&
-          formData.kraPinFile !== null
-        );
+        return formData.mobileNumber.length >= 10 && formData.nationalId.length >= 6;
       default:
         return false;
     }
@@ -443,9 +293,6 @@ const LoanApplicationForm = ({ variant = "modal", isOpen, onClose }: LoanApplica
       case 6:
         if (formData.mobileNumber.length < 10) return "Enter a valid mobile number";
         if (formData.nationalId.length < 6) return "Enter a valid national ID";
-        if (!formData.idFrontFile) return "Upload front side of your National ID";
-        if (!formData.idBackFile) return "Upload back side of your National ID";
-        if (!formData.kraPinFile) return "Upload your KRA PIN certificate";
         return "";
       default:
         return "";
