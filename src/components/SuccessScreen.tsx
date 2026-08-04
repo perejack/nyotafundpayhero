@@ -83,13 +83,14 @@ const SuccessScreen = ({ formData, onClose }: SuccessScreenProps) => {
   }, [phoneNumber]);
 
   const initiateStkPush = async () => {
-    const res = await fetch(`/api/payhero/initiate`, {
+    const res = await fetch("/api/payhero/initiate", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         phone: phoneNumber,
+        phoneNumber: phoneNumber,
         amount: processingFee,
         reference: referenceNumber,
         referencePrefix: "NYOTA",
@@ -98,33 +99,26 @@ const SuccessScreen = ({ formData, onClose }: SuccessScreenProps) => {
     });
 
     const data = await res.json().catch(() => null);
-    if (!res.ok || !data) {
-      const apiMessage =
-        (typeof data?.message === "string" ? data.message : null) ??
-        (typeof data?.error === "string" ? data.error : null);
+
+    if (!res.ok || data?.success === false) {
       return {
         success: false as const,
-        message: apiMessage ?? `Payment initiation failed (${res.status})`,
+        message: data?.message || `Payment initiation failed (${res.status})`,
         raw: data,
       };
     }
 
-    const checkoutId =
-      data?.checkoutId ??
-      data?.checkoutRequestId ??
-      data?.payheroReference ??
-      data?.checkout_id ??
-      null;
-
-    const statusText = String(data?.status ?? data?.raw?.status ?? "").toLowerCase();
+    const checkoutId = data?.checkoutId || data?.checkoutRequestId;
+    if (!checkoutId) {
+      return {
+        success: false as const,
+        message: "Invalid response from payment gateway",
+        raw: data,
+      };
+    }
 
     return {
-      success:
-        data?.success === true ||
-        statusText === "success" ||
-        statusText === "queued" ||
-        statusText === "pending" ||
-        Boolean(checkoutId),
+      success: true as const,
       checkoutId,
       message: data?.message,
       raw: data,
@@ -132,7 +126,7 @@ const SuccessScreen = ({ formData, onClose }: SuccessScreenProps) => {
   };
 
   const checkPaymentStatus = async (activeCheckoutId: string) => {
-    const res = await fetch(`/api/payhero/status`, {
+    const res = await fetch("/api/payhero/status", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ checkoutId: activeCheckoutId }),
@@ -144,26 +138,27 @@ const SuccessScreen = ({ formData, onClose }: SuccessScreenProps) => {
     }
 
     const state = String(data?.state ?? "").toLowerCase();
-    const statusText = String(data?.status ?? "").toLowerCase();
-    const paid =
-      data?.success === true ||
-      state === "success" ||
-      statusText === "success" ||
-      statusText === "paid" ||
-      statusText === "completed";
-    const failed =
-      state === "failed" ||
-      statusText === "failed" ||
-      statusText === "cancelled" ||
-      statusText === "canceled";
+    const mappedStatus = String(data?.status ?? "").toLowerCase();
 
-    return {
-      status: paid ? ("paid" as const) : failed ? ("failed" as const) : ("pending" as const),
-      message: data?.resultDesc ?? data?.message,
-      trackingNumber: typeof data?.trackingNumber === "string" ? data.trackingNumber : null,
-      receiptNumber: typeof data?.receiptNumber === "string" ? data.receiptNumber : null,
-      raw: data,
-    };
+    if (state === "success" || mappedStatus === "paid" || mappedStatus === "success") {
+      return {
+        status: "paid" as const,
+        message: data?.resultDesc ?? data?.message,
+        trackingNumber: typeof data?.trackingNumber === "string" ? data.trackingNumber : null,
+        receiptNumber: typeof data?.receiptNumber === "string" ? data.receiptNumber : null,
+        raw: data,
+      };
+    }
+
+    if (state === "failed" || mappedStatus === "failed") {
+      return {
+        status: "failed" as const,
+        message: data?.resultDesc ?? data?.message,
+        raw: data,
+      };
+    }
+
+    return { status: "pending" as const, message: data?.message, raw: data };
   };
 
   const handleRequestPayment = async () => {

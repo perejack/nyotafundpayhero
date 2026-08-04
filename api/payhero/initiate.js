@@ -9,15 +9,6 @@ const PAYHERO_AUTH_TOKEN =
   "Basic ZmxnMTBsSFF2YmRFb2RlVDdqdlo6eFpsUnNhOFhWbnNvZzhCYWpFb3RkV2ZGaFhkZGZ5NDREamtzWUxpcQ==";
 const PAYHERO_CHANNEL_ID = 11262;
 
-function sendJson(res, statusCode, payload) {
-  if (typeof res.status === "function") {
-    return res.status(statusCode).json(payload);
-  }
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(payload));
-}
-
 function parseBody(req) {
   const raw = req.body;
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
@@ -35,17 +26,16 @@ function parseBody(req) {
 }
 
 function normalizePhoneNumber(phone) {
-  if (phone === undefined || phone === null || phone === "") return null;
+  if (!phone) return null;
 
   const cleaned = String(phone).replace(/\D/g, "");
-  if (!cleaned) return null;
-
-  if (cleaned.startsWith("254") && cleaned.length === 12) {
-    return `0${cleaned.slice(3)}`;
-  }
 
   if (cleaned.startsWith("0") && cleaned.length === 10) {
     return cleaned;
+  }
+
+  if (cleaned.startsWith("254") && cleaned.length === 12) {
+    return `0${cleaned.slice(3)}`;
   }
 
   if ((cleaned.startsWith("7") || cleaned.startsWith("1")) && cleaned.length === 9) {
@@ -55,171 +45,133 @@ function normalizePhoneNumber(phone) {
   return null;
 }
 
+function getAuthHeader() {
+  return PAYHERO_AUTH_TOKEN;
+}
+
 function extractReference(data) {
-  const candidates = [
-    data?.reference,
-    data?.Reference,
-    data?.checkoutId,
-    data?.checkoutRequestId,
-    data?.CheckoutRequestID,
-  ];
+  const direct =
+    data.reference ??
+    data.Reference ??
+    data.checkoutId ??
+    data.checkoutRequestId ??
+    data.CheckoutRequestID;
 
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
-  }
+  if (typeof direct === "string" && direct.trim()) return direct;
 
-  const nested = data?.data;
+  const nested = data.data;
   if (nested && typeof nested === "object") {
+    const nestedObj = nested;
     const nestedRef =
-      nested.reference ??
-      nested.Reference ??
-      nested.checkoutId ??
-      nested.checkoutRequestId ??
-      nested.CheckoutRequestID;
-    if (typeof nestedRef === "string" && nestedRef.trim()) return nestedRef.trim();
+      nestedObj.reference ??
+      nestedObj.Reference ??
+      nestedObj.checkoutId ??
+      nestedObj.checkoutRequestId ??
+      nestedObj.CheckoutRequestID;
+    if (typeof nestedRef === "string" && nestedRef.trim()) return nestedRef;
   }
 
   return null;
-}
-
-function isPayheroSuccess(data, checkoutId) {
-  if (data?.success === true) return true;
-
-  const status = String(data?.status ?? data?.Status ?? "").toUpperCase();
-  if (status === "SUCCESS" || status === "QUEUED" || status === "PENDING") return true;
-
-  return Boolean(checkoutId);
 }
 
 export default async function handler(req, res) {
   Object.entries(corsHeaders).forEach(([key, value]) => res.setHeader(key, value));
 
   if (req.method === "OPTIONS") {
-    if (typeof res.status === "function") return res.status(204).end();
-    res.statusCode = 204;
-    return res.end();
+    return res.status(204).end();
   }
 
   if (req.method !== "POST") {
-    return sendJson(res, 405, { message: "Method not allowed" });
+    return res.status(405).json({ message: "Method not allowed" });
   }
+
+  const authHeader = getAuthHeader();
+  const channelId = PAYHERO_CHANNEL_ID;
 
   try {
     const body = parseBody(req);
-    const rawPhone = body.phone ?? body.phoneNumber ?? body.phone_number ?? body.msisdn;
+    const rawPhone =
+      (typeof body.phone === "string" ? body.phone : undefined) ??
+      (typeof body.phoneNumber === "string" ? body.phoneNumber : undefined) ??
+      (typeof body.phone_number === "string" ? body.phone_number : undefined);
 
     const normalizedPhone = normalizePhoneNumber(rawPhone);
     if (!normalizedPhone) {
-      return sendJson(res, 400, {
-        success: false,
-        message: "Invalid phone number. Use 07XXXXXXXX, 011XXXXXXX, or 2547XXXXXXXX.",
-        receivedPhone: rawPhone ?? null,
-      });
+      return res.status(400).json({ success: false, message: "Invalid phone number format" });
     }
 
-    const amount = Math.round(Number(body.amount));
+    const amount = Number(body.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
-      return sendJson(res, 400, {
-        success: false,
-        message: "Invalid amount",
-        receivedAmount: body.amount ?? null,
-      });
+      return res.status(400).json({ success: false, message: "Invalid amount" });
     }
 
     const referencePrefix =
       typeof body.referencePrefix === "string" ? body.referencePrefix : "NYOTA";
     const externalReference =
-      typeof body.reference === "string" && body.reference.trim()
-        ? body.reference.trim()
+      typeof body.reference === "string"
+        ? body.reference
         : `${referencePrefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     const payload = {
       amount,
       phone_number: normalizedPhone,
-      channel_id: PAYHERO_CHANNEL_ID,
+      channel_id: channelId,
       provider: "m-pesa",
       external_reference: externalReference,
-      description:
-        typeof body.description === "string"
-          ? body.description
-          : "Application processing fee",
+      customer_name: typeof body.customer_name === "string" ? body.customer_name : undefined,
+      description: typeof body.description === "string" ? body.description : "Application processing fee",
     };
 
-    if (typeof body.customer_name === "string" && body.customer_name.trim()) {
-      payload.customer_name = body.customer_name.trim();
-    }
+    const payheroRes = await fetch(`${PAYHERO_BASE_URL}/api/v2/payments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: authHeader,
+      },
+      body: JSON.stringify(payload),
+    });
 
-    let payheroRes;
-    try {
-      payheroRes = await fetch(`${PAYHERO_BASE_URL}/api/v2/payments`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: PAYHERO_AUTH_TOKEN,
-        },
-        body: JSON.stringify(payload),
-      });
-    } catch (networkErr) {
-      const message = networkErr instanceof Error ? networkErr.message : "Network error";
-      return sendJson(res, 502, {
-        success: false,
-        message: `Could not reach PayHero: ${message}`,
-      });
-    }
+    const data = await payheroRes.json().catch(() => null);
 
-    const responseText = await payheroRes.text().catch(() => "");
-    let data = null;
-    if (responseText) {
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        data = { rawText: responseText.slice(0, 500) };
-      }
-    }
-
-    if (!payheroRes.ok) {
-      return sendJson(res, payheroRes.status >= 400 && payheroRes.status < 600 ? payheroRes.status : 502, {
+    if (!payheroRes.ok || !data) {
+      return res.status(payheroRes.status || 500).json({
         success: false,
         message:
           (typeof data?.message === "string" ? data.message : null) ??
           (typeof data?.error === "string" ? data.error : null) ??
-          `PayHero request failed (${payheroRes.status})`,
+          "Payment initiation failed",
         raw: data,
-      });
-    }
-
-    if (!data) {
-      return sendJson(res, 502, {
-        success: false,
-        message: "PayHero returned an empty response",
       });
     }
 
     const checkoutId = extractReference(data);
-    if (!isPayheroSuccess(data, checkoutId)) {
-      return sendJson(res, 400, {
+    const success =
+      data.success === true ||
+      String(data.status ?? "").toLowerCase() === "success" ||
+      String(data.status ?? "").toLowerCase() === "queued" ||
+      Boolean(checkoutId);
+
+    if (!success || !checkoutId) {
+      return res.status(400).json({
         success: false,
         message:
           (typeof data.message === "string" ? data.message : null) ??
-          "Payment initiation failed — unexpected PayHero response",
+          "Payment initiation failed",
         raw: data,
       });
     }
 
-    return sendJson(res, 200, {
+    return res.status(200).json({
       success: true,
-      checkoutId: checkoutId ?? externalReference,
-      checkoutRequestId: checkoutId ?? externalReference,
+      checkoutId,
+      checkoutRequestId: checkoutId,
       reference: externalReference,
-      payheroReference: checkoutId,
       normalizedPhone: `254${normalizedPhone.slice(1)}`,
-      message:
-        (typeof data.message === "string" ? data.message : null) ??
-        "STK push initiated. Check your phone.",
+      message: typeof data.message === "string" ? data.message : "STK push initiated",
       raw: data,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Payment initiation failed";
-    return sendJson(res, 500, { success: false, message, error: String(err) });
+    return res.status(500).json({ success: false, message });
   }
 }

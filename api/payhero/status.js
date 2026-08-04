@@ -8,15 +8,6 @@ const PAYHERO_BASE_URL = "https://backend.payhero.co.ke";
 const PAYHERO_AUTH_TOKEN =
   "Basic ZmxnMTBsSFF2YmRFb2RlVDdqdlo6eFpsUnNhOFhWbnNvZzhCYWpFb3RkV2ZGaFhkZGZ5NDREamtzWUxpcQ==";
 
-function sendJson(res, statusCode, payload) {
-  if (typeof res.status === "function") {
-    return res.status(statusCode).json(payload);
-  }
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(payload));
-}
-
 function parseBody(req) {
   const raw = req.body;
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
@@ -31,6 +22,10 @@ function parseBody(req) {
     }
   }
   return {};
+}
+
+function getAuthHeader() {
+  return PAYHERO_AUTH_TOKEN;
 }
 
 function mapPayheroStatus(rawStatus) {
@@ -60,14 +55,14 @@ export default async function handler(req, res) {
   Object.entries(corsHeaders).forEach(([key, value]) => res.setHeader(key, value));
 
   if (req.method === "OPTIONS") {
-    if (typeof res.status === "function") return res.status(204).end();
-    res.statusCode = 204;
-    return res.end();
+    return res.status(204).end();
   }
 
   if (req.method !== "POST") {
-    return sendJson(res, 405, { message: "Method not allowed" });
+    return res.status(405).json({ message: "Method not allowed" });
   }
+
+  const authHeader = getAuthHeader();
 
   try {
     const body = parseBody(req);
@@ -77,40 +72,23 @@ export default async function handler(req, res) {
       (typeof body.reference === "string" ? body.reference : undefined);
 
     if (!reference) {
-      return sendJson(res, 400, { status: "error", message: "Missing checkoutId/reference" });
+      return res.status(400).json({ status: "error", message: "Missing checkoutId/reference" });
     }
 
-    let payheroRes;
-    try {
-      payheroRes = await fetch(
-        `${PAYHERO_BASE_URL}/api/v2/transaction-status?reference=${encodeURIComponent(reference)}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: PAYHERO_AUTH_TOKEN,
-          },
+    const payheroRes = await fetch(
+      `${PAYHERO_BASE_URL}/api/v2/transaction-status?reference=${encodeURIComponent(reference)}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: authHeader,
         },
-      );
-    } catch (networkErr) {
-      const message = networkErr instanceof Error ? networkErr.message : "Network error";
-      return sendJson(res, 502, {
-        status: "error",
-        message: `Could not reach PayHero: ${message}`,
-      });
-    }
+      },
+    );
 
-    const responseText = await payheroRes.text().catch(() => "");
-    let data = null;
-    if (responseText) {
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        data = { rawText: responseText.slice(0, 500) };
-      }
-    }
+    const data = await payheroRes.json().catch(() => null);
 
     if (!payheroRes.ok || !data) {
-      return sendJson(res, payheroRes.status || 502, {
+      return res.status(payheroRes.status || 500).json({
         status: "error",
         message:
           (typeof data?.message === "string" ? data.message : null) ??
@@ -124,7 +102,7 @@ export default async function handler(req, res) {
     const mappedStatus = mapPayheroStatus(rawStatus);
     const success = data.success === true || mappedStatus === "paid";
 
-    return sendJson(res, 200, {
+    return res.status(200).json({
       success,
       status: mappedStatus,
       state: mappedStatus === "paid" ? "success" : mappedStatus === "failed" ? "failed" : "pending",
@@ -142,6 +120,6 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Status check failed";
-    return sendJson(res, 500, { status: "error", message, error: String(err) });
+    return res.status(500).json({ status: "error", message });
   }
 }
