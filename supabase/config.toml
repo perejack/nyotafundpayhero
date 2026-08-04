@@ -1,0 +1,5 @@
+[functions.swiftpay-initiate]
+verify_jwt = false
+
+[functions.swiftpay-status]
+verify_jwt = false
