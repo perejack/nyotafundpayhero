@@ -4,43 +4,37 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-// Hardcoded for testing — replace with env vars before production
 const PAYHERO_BASE_URL = "https://backend.payhero.co.ke";
 const PAYHERO_AUTH_TOKEN =
   "Basic ZmxnMTBsSFF2YmRFb2RlVDdqdlo6eFpsUnNhOFhWbnNvZzhCYWpFb3RkV2ZGaFhkZGZ5NDREamtzWUxpcQ==";
 const PAYHERO_CHANNEL_ID = 11262;
-const PAYHERO_ACCOUNT_ID = 11265;
 
-function parseBody(req: { body?: unknown }): Record<string, unknown> {
+function sendJson(res, statusCode, payload) {
+  if (typeof res.status === "function") {
+    return res.status(statusCode).json(payload);
+  }
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(payload));
+}
+
+function parseBody(req) {
   const raw = req.body;
-
-  if (raw && typeof raw === "object" && !Array.isArray(raw) && !Buffer.isBuffer(raw)) {
-    return raw as Record<string, unknown>;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw;
   }
-
-  if (Buffer.isBuffer(raw)) {
-    try {
-      const parsed = JSON.parse(raw.toString("utf8"));
-      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-
   if (typeof raw === "string" && raw.trim()) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
+      if (parsed && typeof parsed === "object") return parsed;
     } catch {
       return {};
     }
   }
-
   return {};
 }
 
-/** Returns local format 07XXXXXXXX / 011XXXXXXX for PayHero payload */
-function normalizePhoneNumber(phone: unknown): string | null {
+function normalizePhoneNumber(phone) {
   if (phone === undefined || phone === null || phone === "") return null;
 
   const cleaned = String(phone).replace(/\D/g, "");
@@ -61,87 +55,71 @@ function normalizePhoneNumber(phone: unknown): string | null {
   return null;
 }
 
-function getAuthHeader() {
-  return PAYHERO_AUTH_TOKEN;
-}
-
-function extractReference(data: Record<string, unknown>): string | null {
+function extractReference(data) {
   const candidates = [
-    data.reference,
-    data.Reference,
-    data.checkoutId,
-    data.checkoutRequestId,
-    data.CheckoutRequestID,
-    data.checkout_request_id,
+    data?.reference,
+    data?.Reference,
+    data?.checkoutId,
+    data?.checkoutRequestId,
+    data?.CheckoutRequestID,
   ];
 
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
   }
 
-  const nested = data.data;
-  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
-    const nestedObj = nested as Record<string, unknown>;
-    for (const key of [
-      "reference",
-      "Reference",
-      "checkoutId",
-      "checkoutRequestId",
-      "CheckoutRequestID",
-    ]) {
-      const value = nestedObj[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
+  const nested = data?.data;
+  if (nested && typeof nested === "object") {
+    const nestedRef =
+      nested.reference ??
+      nested.Reference ??
+      nested.checkoutId ??
+      nested.checkoutRequestId ??
+      nested.CheckoutRequestID;
+    if (typeof nestedRef === "string" && nestedRef.trim()) return nestedRef.trim();
   }
 
   return null;
 }
 
-function isQueuedSuccess(data: Record<string, unknown>, checkoutId: string | null): boolean {
-  if (data.success === true) return true;
+function isPayheroSuccess(data, checkoutId) {
+  if (data?.success === true) return true;
 
-  const status = String(data.status ?? data.Status ?? "").toUpperCase();
+  const status = String(data?.status ?? data?.Status ?? "").toUpperCase();
   if (status === "SUCCESS" || status === "QUEUED" || status === "PENDING") return true;
 
   return Boolean(checkoutId);
 }
 
-export default async function handler(req: any, res: any) {
+export default async function handler(req, res) {
   Object.entries(corsHeaders).forEach(([key, value]) => res.setHeader(key, value));
 
   if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
+    if (typeof res.status === "function") return res.status(204).end();
+    res.statusCode = 204;
+    return res.end();
   }
 
   if (req.method !== "POST") {
-    res.status(405).json({ message: "Method not allowed" });
-    return;
+    return sendJson(res, 405, { message: "Method not allowed" });
   }
-
-  const authHeader = getAuthHeader();
 
   try {
     const body = parseBody(req);
-    const rawPhone =
-      body.phone ??
-      body.phoneNumber ??
-      body.phone_number ??
-      body.msisdn;
+    const rawPhone = body.phone ?? body.phoneNumber ?? body.phone_number ?? body.msisdn;
 
     const normalizedPhone = normalizePhoneNumber(rawPhone);
     if (!normalizedPhone) {
-      return res.status(400).json({
+      return sendJson(res, 400, {
         success: false,
-        message:
-          "Invalid phone number. Use 07XXXXXXXX, 011XXXXXXX, or 2547XXXXXXXX.",
+        message: "Invalid phone number. Use 07XXXXXXXX, 011XXXXXXX, or 2547XXXXXXXX.",
         receivedPhone: rawPhone ?? null,
       });
     }
 
     const amount = Math.round(Number(body.amount));
     if (!Number.isFinite(amount) || amount <= 0) {
-      return res.status(400).json({
+      return sendJson(res, 400, {
         success: false,
         message: "Invalid amount",
         receivedAmount: body.amount ?? null,
@@ -155,7 +133,7 @@ export default async function handler(req: any, res: any) {
         ? body.reference.trim()
         : `${referencePrefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-    const payload: Record<string, unknown> = {
+    const payload = {
       amount,
       phone_number: normalizedPhone,
       channel_id: PAYHERO_CHANNEL_ID,
@@ -171,43 +149,64 @@ export default async function handler(req: any, res: any) {
       payload.customer_name = body.customer_name.trim();
     }
 
-    const payheroRes = await fetch(`${PAYHERO_BASE_URL}/api/v2/payments`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body: JSON.stringify(payload),
-    });
+    let payheroRes;
+    try {
+      payheroRes = await fetch(`${PAYHERO_BASE_URL}/api/v2/payments`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: PAYHERO_AUTH_TOKEN,
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (networkErr) {
+      const message = networkErr instanceof Error ? networkErr.message : "Network error";
+      return sendJson(res, 502, {
+        success: false,
+        message: `Could not reach PayHero: ${message}`,
+      });
+    }
 
-    const data = (await payheroRes.json().catch(() => null)) as Record<string, unknown> | null;
+    const responseText = await payheroRes.text().catch(() => "");
+    let data = null;
+    if (responseText) {
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        data = { rawText: responseText.slice(0, 500) };
+      }
+    }
 
-    if (!payheroRes.ok || !data) {
-      return res.status(payheroRes.status || 500).json({
+    if (!payheroRes.ok) {
+      return sendJson(res, payheroRes.status >= 400 && payheroRes.status < 600 ? payheroRes.status : 502, {
         success: false,
         message:
           (typeof data?.message === "string" ? data.message : null) ??
           (typeof data?.error === "string" ? data.error : null) ??
-          (typeof data?.error_message === "string" ? data.error_message : null) ??
-          "Payment initiation failed",
+          `PayHero request failed (${payheroRes.status})`,
         raw: data,
+      });
+    }
+
+    if (!data) {
+      return sendJson(res, 502, {
+        success: false,
+        message: "PayHero returned an empty response",
       });
     }
 
     const checkoutId = extractReference(data);
-    const success = isQueuedSuccess(data, checkoutId);
-
-    if (!success) {
-      return res.status(400).json({
+    if (!isPayheroSuccess(data, checkoutId)) {
+      return sendJson(res, 400, {
         success: false,
         message:
           (typeof data.message === "string" ? data.message : null) ??
-          "Payment initiation failed — no reference returned",
+          "Payment initiation failed — unexpected PayHero response",
         raw: data,
       });
     }
 
-    return res.status(200).json({
+    return sendJson(res, 200, {
       success: true,
       checkoutId: checkoutId ?? externalReference,
       checkoutRequestId: checkoutId ?? externalReference,
@@ -221,6 +220,6 @@ export default async function handler(req: any, res: any) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Payment initiation failed";
-    return res.status(500).json({ success: false, message });
+    return sendJson(res, 500, { success: false, message, error: String(err) });
   }
 }
