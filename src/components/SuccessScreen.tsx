@@ -75,8 +75,11 @@ const SuccessScreen = ({ formData, onClose }: SuccessScreenProps) => {
   }, [referenceNumber]);
 
   const isPhoneValid = useMemo(() => {
-    const cleaned = phoneNumber.replace(/\s+/g, "");
-    return cleaned.length >= 10;
+    const cleaned = phoneNumber.replace(/\D/g, "");
+    if (/^0(7\d{8}|1\d{8})$/.test(cleaned)) return true;
+    if (/^254(7\d{8}|1\d{8})$/.test(cleaned)) return true;
+    if (/^(7\d{8}|1\d{8})$/.test(cleaned)) return true;
+    return false;
   }, [phoneNumber]);
 
   const initiateStkPush = async () => {
@@ -96,13 +99,32 @@ const SuccessScreen = ({ formData, onClose }: SuccessScreenProps) => {
 
     const data = await res.json().catch(() => null);
     if (!res.ok || !data) {
-      return { success: false as const, message: "Payment initiation failed", raw: data };
+      const apiMessage =
+        (typeof data?.message === "string" ? data.message : null) ??
+        (typeof data?.error === "string" ? data.error : null);
+      return {
+        success: false as const,
+        message: apiMessage ?? `Payment initiation failed (${res.status})`,
+        raw: data,
+      };
     }
 
-    const checkoutId = data?.checkoutId ?? data?.checkoutRequestId ?? data?.checkout_id ?? null;
+    const checkoutId =
+      data?.checkoutId ??
+      data?.checkoutRequestId ??
+      data?.payheroReference ??
+      data?.checkout_id ??
+      null;
+
+    const statusText = String(data?.status ?? data?.raw?.status ?? "").toLowerCase();
 
     return {
-      success: Boolean(data?.success) || String(data?.status ?? "").toLowerCase() === "success",
+      success:
+        data?.success === true ||
+        statusText === "success" ||
+        statusText === "queued" ||
+        statusText === "pending" ||
+        Boolean(checkoutId),
       checkoutId,
       message: data?.message,
       raw: data,
@@ -503,7 +525,7 @@ const SuccessScreen = ({ formData, onClose }: SuccessScreenProps) => {
                     inputSize="lg"
                     placeholder="07XXXXXXXX"
                     value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                    onChange={(e) => setPhoneNumber(e.target.value.replace(/\D/g, "").slice(0, 12))}
                   />
                   <p className="text-[11px] text-muted-foreground">You’ll receive an M-Pesa prompt on your phone to complete the payment.</p>
                 </div>
