@@ -1,23 +1,24 @@
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
 const PAYHERO_BASE_URL = "https://backend.payhero.co.ke";
+// Hardcoded fallback for testing / environment
 const PAYHERO_AUTH_TOKEN =
   "Basic ZmxnMTBsSFF2YmRFb2RlVDdqdlo6eFpsUnNhOFhWbnNvZzhCYWpFb3RkV2ZGaFhkZGZ5NDREamtzWUxpcQ==";
 const PAYHERO_CHANNEL_ID = 11262;
 
-function parseBody(req) {
+function parseBody(req: { body?: unknown }): Record<string, unknown> {
   const raw = req.body;
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return raw;
+    return raw as Record<string, unknown>;
   }
   if (typeof raw === "string" && raw.trim()) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed;
+      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
     } catch {
       return {};
     }
@@ -25,43 +26,34 @@ function parseBody(req) {
   return {};
 }
 
-function normalizePhoneNumber(phone) {
+function normalizePhoneNumber(phone: string | undefined | null): string | null {
   if (!phone) return null;
-
   const cleaned = String(phone).replace(/\D/g, "");
-
-  if (cleaned.startsWith("0") && cleaned.length === 10) {
-    return cleaned;
-  }
-
-  if (cleaned.startsWith("254") && cleaned.length === 12) {
-    return `0${cleaned.slice(3)}`;
-  }
-
+  if (cleaned.startsWith("0") && cleaned.length === 10) return cleaned;
+  if (cleaned.startsWith("254") && cleaned.length === 12) return `0${cleaned.slice(3)}`;
   if ((cleaned.startsWith("7") || cleaned.startsWith("1")) && cleaned.length === 9) {
     return `0${cleaned}`;
   }
-
   return null;
 }
 
-function getAuthHeader() {
-  return PAYHERO_AUTH_TOKEN;
+function getAuthHeader(): string {
+  const token = process.env.PAYHERO_AUTH_TOKEN ?? PAYHERO_AUTH_TOKEN;
+  return token.startsWith("Basic ") ? token : `Basic ${token}`;
 }
 
-function extractReference(data) {
+function extractReference(data: Record<string, unknown>): string | null {
   const direct =
     data.reference ??
     data.Reference ??
     data.checkoutId ??
     data.checkoutRequestId ??
     data.CheckoutRequestID;
-
   if (typeof direct === "string" && direct.trim()) return direct;
 
   const nested = data.data;
   if (nested && typeof nested === "object") {
-    const nestedObj = nested;
+    const nestedObj = nested as Record<string, unknown>;
     const nestedRef =
       nestedObj.reference ??
       nestedObj.Reference ??
@@ -70,23 +62,17 @@ function extractReference(data) {
       nestedObj.CheckoutRequestID;
     if (typeof nestedRef === "string" && nestedRef.trim()) return nestedRef;
   }
-
   return null;
 }
 
-export default async function handler(req, res) {
+export default async function handler(req: any, res: any) {
   Object.entries(corsHeaders).forEach(([key, value]) => res.setHeader(key, value));
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const authHeader = getAuthHeader();
-  const channelId = PAYHERO_CHANNEL_ID;
+  const channelId = Number(process.env.PAYHERO_CHANNEL_ID ?? PAYHERO_CHANNEL_ID);
 
   try {
     const body = parseBody(req);
@@ -113,7 +99,7 @@ export default async function handler(req, res) {
         : `${referencePrefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     const payload = {
-      amount,
+      amount: Math.round(amount),
       phone_number: normalizedPhone,
       channel_id: channelId,
       provider: "m-pesa",
@@ -131,7 +117,7 @@ export default async function handler(req, res) {
       body: JSON.stringify(payload),
     });
 
-    const data = await payheroRes.json().catch(() => null);
+    const data = (await payheroRes.json().catch(() => null)) as Record<string, unknown> | null;
 
     if (!payheroRes.ok || !data) {
       return res.status(payheroRes.status || 500).json({
@@ -148,15 +134,13 @@ export default async function handler(req, res) {
     const success =
       data.success === true ||
       String(data.status ?? "").toLowerCase() === "success" ||
-      String(data.status ?? "").toLowerCase() === "queued" ||
       Boolean(checkoutId);
 
     if (!success || !checkoutId) {
       return res.status(400).json({
         success: false,
         message:
-          (typeof data.message === "string" ? data.message : null) ??
-          "Payment initiation failed",
+          (typeof data.message === "string" ? data.message : null) ?? "Payment initiation failed",
         raw: data,
       });
     }

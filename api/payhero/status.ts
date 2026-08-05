@@ -1,22 +1,23 @@
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
 const PAYHERO_BASE_URL = "https://backend.payhero.co.ke";
+// Hardcoded fallback for testing / environment
 const PAYHERO_AUTH_TOKEN =
   "Basic ZmxnMTBsSFF2YmRFb2RlVDdqdlo6eFpsUnNhOFhWbnNvZzhCYWpFb3RkV2ZGaFhkZGZ5NDREamtzWUxpcQ==";
 
-function parseBody(req) {
+function parseBody(req: { body?: unknown }): Record<string, unknown> {
   const raw = req.body;
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return raw;
+    return raw as Record<string, unknown>;
   }
   if (typeof raw === "string" && raw.trim()) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return parsed;
+      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
     } catch {
       return {};
     }
@@ -24,43 +25,23 @@ function parseBody(req) {
   return {};
 }
 
-function getAuthHeader() {
-  return PAYHERO_AUTH_TOKEN;
+function getAuthHeader(): string {
+  const token = process.env.PAYHERO_AUTH_TOKEN ?? PAYHERO_AUTH_TOKEN;
+  return token.startsWith("Basic ") ? token : `Basic ${token}`;
 }
 
-function mapPayheroStatus(rawStatus) {
+function mapPayheroStatus(rawStatus: string): "paid" | "failed" | "pending" {
   const status = rawStatus.toUpperCase();
-
-  if (status === "SUCCESS" || status === "COMPLETED" || status === "PAID") {
-    return "paid";
-  }
-
-  if (status === "FAILED" || status === "CANCELLED" || status === "CANCELED") {
-    return "failed";
-  }
-
+  if (status === "SUCCESS" || status === "COMPLETED" || status === "PAID") return "paid";
+  if (status === "FAILED" || status === "CANCELLED" || status === "CANCELED") return "failed";
   return "pending";
 }
 
-function deriveTrackingNumber(checkoutId) {
-  const suffix = String(checkoutId)
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(-8)
-    .toUpperCase();
-
-  return `NYOTA-TRK-${suffix || Date.now().toString().slice(-8)}`;
-}
-
-export default async function handler(req, res) {
+export default async function handler(req: any, res: any) {
   Object.entries(corsHeaders).forEach(([key, value]) => res.setHeader(key, value));
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
 
   const authHeader = getAuthHeader();
 
@@ -79,13 +60,11 @@ export default async function handler(req, res) {
       `${PAYHERO_BASE_URL}/api/v2/transaction-status?reference=${encodeURIComponent(reference)}`,
       {
         method: "GET",
-        headers: {
-          Authorization: authHeader,
-        },
+        headers: { Authorization: authHeader },
       },
     );
 
-    const data = await payheroRes.json().catch(() => null);
+    const data = (await payheroRes.json().catch(() => null)) as Record<string, unknown> | null;
 
     if (!payheroRes.ok || !data) {
       return res.status(payheroRes.status || 500).json({
@@ -115,7 +94,6 @@ export default async function handler(req, res) {
         (typeof data.provider_reference === "string" ? data.provider_reference : null) ??
         (typeof data.third_party_reference === "string" ? data.third_party_reference : null) ??
         (typeof data.payment_reference === "string" ? data.payment_reference : null),
-      trackingNumber: mappedStatus === "paid" ? deriveTrackingNumber(reference) : null,
       raw: data,
     });
   } catch (err) {

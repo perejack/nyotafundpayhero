@@ -10,6 +10,14 @@
       "destination": "/robots.txt"
     },
     {
+      "source": "/api/payhero/initiate",
+      "destination": "/api/payhero-initiate"
+    },
+    {
+      "source": "/api/payhero/status",
+      "destination": "/api/payhero-status"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },
