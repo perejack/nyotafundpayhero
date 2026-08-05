@@ -5,9 +5,9 @@ const corsHeaders: Record<string, string> = {
 };
 
 const PAYHERO_BASE_URL = "https://backend.payhero.co.ke";
-// Hardcoded fallback for testing / environment
+// Working PayHero Credentials
 const PAYHERO_AUTH_TOKEN =
-  "Basic ZmxnMTBsSFF2YmRFb2RlVDdqdlo6eFpsUnNhOFhWbnNvZzhCYWpFb3RkV2ZGaFhkZGZ5NDREamtzWUxpcQ==";
+  "Basic OXhwektZa2VnZ1pWSUhsZUF1eG86N3I2cTA2UkFXSlJwUWhzS2cxNmJIdzNvSnNXbjNBNDNtZVh3ODhWbg==";
 
 function parseBody(req: { body?: unknown }): Record<string, unknown> {
   const raw = req.body;
